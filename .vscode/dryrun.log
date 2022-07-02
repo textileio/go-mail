@@ -1,0 +1,9 @@
+make --dry-run --always-make --keep-going --print-directory
+make: Entering directory `/Users/wangjingxuan/go/src/github.com/textileio/go-mail'
+# Install binary/ries using Go 1.14+ build command. This is using bwplotka/bingo-controlled, separate go module with pinned dependencies.
+echo "(re)installing /Users/wangjingxuan/go/bin/govvv-v0.3.0"
+cd .bingo && /opt/homebrew/bin/go build -mod=mod -modfile=govvv.mod -o=/Users/wangjingxuan/go/bin/govvv-v0.3.0 "github.com/ahmetb/govvv"
+ 
+CGO_ENABLED=0 go build -ldflags="-X github.com/textileio/go-mail/buildinfo.BuildDate=2022-06-24T02:49:11Z -X github.com/textileio/go-mail/buildinfo.GitCommit=6aa05bb -X github.com/textileio/go-mail/buildinfo.GitBranch=nelson_init_go_mail -X github.com/textileio/go-mail/buildinfo.GitState=dirty -X github.com/textileio/go-mail/buildinfo.GitSummary=6aa05bb -X github.com/textileio/go-mail/buildinfo.Version=git" ./...
+make: Leaving directory `/Users/wangjingxuan/go/src/github.com/textileio/go-mail'
+ 
