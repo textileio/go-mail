@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"github.com/textileio/go-mail/api/client"
+	mailClient "github.com/textileio/go-mail/api/client"
 	"github.com/textileio/go-mail/cmd"
+	threadClient "github.com/textileio/go-threads/api/client"
 	"github.com/textileio/go-threads/core/thread"
 )
 
@@ -24,9 +25,9 @@ var (
 	ErrAPIKeyRequired = errors.New("api key is required")
 
 	flags = map[string]cmd.Flag{
-		"identity":   {Key: "identity", DefValue: ""},
-		"api_key":    {Key: "api_key", DefValue: ""},
-		"api_secret": {Key: "api_secret", DefValue: ""},
+		"key":      {Key: "key", DefValue: ""},
+		"thread":   {Key: "thread", DefValue: ""},
+		"identity": {Key: "identity", DefValue: ""},
 	}
 )
 
@@ -42,41 +43,48 @@ func DefaultConfConfig() cmd.ConfConfig {
 
 // Mail is used to create new mailboxes based on the provided client and config.
 type Mail struct {
-	config cmd.ConfConfig
-	client *client.Client
+	conf cmd.ConfConfig
+	mc   *mailClient.Client
+	tc   *threadClient.Client
 }
 
 // NewMail creates Mail from client and config.
-func NewMail(client *client.Client, config cmd.ConfConfig) *Mail {
-	return &Mail{client: client, config: config}
+func NewMail(mailClient *mailClient.Client, threadClient *threadClient.Client, config cmd.ConfConfig) *Mail {
+	return &Mail{mc: mailClient, tc: threadClient, conf: config}
 }
 
 // client returns the underlying client object.
-func (m *Mail) Client() *client.Client {
-	return m.client
+func (m *Mail) MailClient() *mailClient.Client {
+	return m.mc
+}
+
+func (m *Mail) ThreadClient() *threadClient.Client {
+	return m.tc
 }
 
 // Config contains details for a new local mailbox.
 type Config struct {
 	// Path is the path in which the new mailbox should be created (required).
 	Path string
-	// Identity is the thread.Identity of the mailbox owner (required).
-	// It's value may be inflated from a --identity flag or {EnvPrefix}_IDENTITY env variable.
+	// Identity is an identity to use with the target thread.
+	// It's value may be inflated from an --identity flag or {EnvPrefix}_IDENTITY env variable.
+	// @todo: Handle more identities
+	// @todo: Pull this from a global config of identites, i.e., ~/.threads:
+	//   identities:
+	//     default: clyde
+	//     clyde: <priv_key_base_64>
+	//     eddy: <priv_key_base_64>
 	Identity thread.Identity
-	// APIKey is hub API key (required).
-	// It's value may be inflated from a --api-key flag or {EnvPrefix}_API_KEY env variable.
-	APIKey string
-	// APISecret is hub API key secret (optional).
-	// It's value may be inflated from a --api-secret flag or {EnvPrefix}_API_SECRET env variable.
-	APISecret string
+
+	// Thread is the thread ID of the target thread (required).
+	// Its value may be inflated from a --thread flag or {EnvPrefix}_THREAD env variable.
+	Thread thread.ID
 }
 
 // NewConfigFromCmd returns a config by inflating values from the given cobra command and path.
-// First, flags for "identity", "api_key", and "api_secret" are used if they exist.
-// If still unset, the env vars {EnvPrefix}_IDENTITY, {EnvPrefix}_API_KEY, and {EnvPrefix}_API_SECRET are used.
 func (m *Mail) NewConfigFromCmd(c *cobra.Command, pth string) (conf Config, err error) {
 	conf.Path = pth
-	id := cmd.GetFlagOrEnvValue(c, "identity", m.config.EnvPrefix)
+	id := cmd.GetFlagOrEnvValue(c, "identity", m.conf.EnvPrefix)
 	if id == "" {
 		return conf, ErrIdentityRequired
 	}
@@ -88,11 +96,7 @@ func (m *Mail) NewConfigFromCmd(c *cobra.Command, pth string) (conf Config, err 
 	if err = conf.Identity.UnmarshalBinary(idb); err != nil {
 		return
 	}
-	conf.APIKey = cmd.GetFlagOrEnvValue(c, "api_key", m.config.EnvPrefix)
-	if conf.APIKey == "" {
-		return conf, ErrAPIKeyRequired
-	}
-	conf.APISecret = cmd.GetFlagOrEnvValue(c, "api_secret", m.config.EnvPrefix)
+
 	return conf, nil
 }
 
@@ -103,7 +107,7 @@ func (m *Mail) NewMailbox(ctx context.Context, conf Config) (box *Mailbox, err e
 	if err != nil {
 		return
 	}
-	mc, found, err := m.config.NewConfig(cwd, flags, true)
+	mc, found, err := m.conf.NewConfig(cwd, flags, true)
 	if err != nil {
 		return
 	}
@@ -120,24 +124,13 @@ func (m *Mail) NewMailbox(ctx context.Context, conf Config) (box *Mailbox, err e
 		return
 	}
 	mc.Viper.Set("identity", base64.StdEncoding.EncodeToString(idb))
-	mc.Viper.Set("api_key", conf.APIKey)
-	if conf.APIKey == "" {
-		return nil, ErrAPIKeyRequired
-	}
-	mc.Viper.Set("api_secret", conf.APISecret)
 
 	box = &Mailbox{
-		cwd:    cwd,
-		conf:   mc,
-		client: m.client,
-		id:     conf.Identity,
-	}
-	ctx, err = box.context(ctx)
-	if err != nil {
-		return
-	}
-	if _, err = m.client.SetupMailbox(ctx); err != nil {
-		return
+		cwd:  cwd,
+		conf: mc,
+		mc:   m.mc,
+		tc:   m.tc,
+		id:   conf.Identity,
 	}
 
 	// Write the local config to disk
@@ -164,18 +157,19 @@ func (m *Mail) GetLocalMailbox(_ context.Context, pth string) (*Mailbox, error) 
 	if err != nil {
 		return nil, err
 	}
-	mc, found, err := m.config.NewConfig(cwd, flags, true)
+	conf, found, err := m.conf.NewConfig(cwd, flags, true)
 	if err != nil {
 		return nil, err
 	}
 	if !found {
 		return nil, ErrNotAMailbox
 	}
-	cmd.ExpandConfigVars(mc.Viper, mc.Flags)
+	cmd.ExpandConfigVars(conf.Viper, conf.Flags)
 	box := &Mailbox{
-		cwd:    cwd,
-		conf:   mc,
-		client: m.client,
+		cwd:  cwd,
+		conf: conf,
+		mc:   m.mc,
+		tc:   m.tc,
 	}
 	if err = box.loadIdentity(); err != nil {
 		return nil, err

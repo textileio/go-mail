@@ -4,11 +4,24 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
+	"errors"
+	gnet "net"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/util/metautils"
+	"github.com/improbable-eng/grpc-web/go/grpcweb"
+	logging "github.com/ipfs/go-log/v2"
 	mbase "github.com/multiformats/go-multibase"
+	"github.com/textileio/go-mail"
+	"github.com/textileio/go-mail/api"
+	pb "github.com/textileio/go-mail/api/pb/mail"
+	"github.com/textileio/go-threads/core/did"
 	"github.com/textileio/go-threads/core/thread"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 type ctxKey string
@@ -273,4 +286,59 @@ func (c Credentials) GetRequestMetadata(ctx context.Context, _ ...string) (map[s
 
 func (c Credentials) RequireTransportSecurity() bool {
 	return c.Secure
+}
+
+var log = logging.Logger("buckets/api")
+
+func GetClientRPCOpts(target string) (opts []grpc.DialOption) {
+	creds := did.RPCCredentials{}
+	if strings.Contains(target, "443") {
+		tcreds := credentials.NewTLS(&tls.Config{})
+		opts = append(opts, grpc.WithTransportCredentials(tcreds))
+		creds.Secure = true
+	} else {
+		opts = append(opts, grpc.WithInsecure())
+	}
+	opts = append(opts, grpc.WithPerRPCCredentials(creds))
+	return opts
+}
+
+func GetServerAndProxy(lib *mail.Mail, listenAddr, listenAddrProxy string) (*grpc.Server, *http.Server, error) {
+	server := grpc.NewServer()
+	listener, err := gnet.Listen("tcp", listenAddr)
+	if err != nil {
+		return nil, nil, err
+	}
+	go func() {
+		pb.RegisterAPIServiceServer(server, api.NewService(lib))
+		if err := server.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			log.Errorf("server error: %v", err)
+		}
+	}()
+	webrpc := grpcweb.WrapServer(
+		server,
+		grpcweb.WithOriginFunc(func(origin string) bool {
+			return true
+		}),
+		grpcweb.WithAllowedRequestHeaders([]string{"Origin"}),
+		grpcweb.WithWebsockets(true),
+		grpcweb.WithWebsocketOriginFunc(func(req *http.Request) bool {
+			return true
+		}))
+	proxy := &http.Server{
+		Addr: listenAddrProxy,
+	}
+	proxy.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if webrpc.IsGrpcWebRequest(r) ||
+			webrpc.IsAcceptableGrpcCorsRequest(r) ||
+			webrpc.IsGrpcWebSocketRequest(r) {
+			webrpc.ServeHTTP(w, r)
+		}
+	})
+	go func() {
+		if err := proxy.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Errorf("proxy error: %v", err)
+		}
+	}()
+	return server, proxy, nil
 }

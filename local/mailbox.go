@@ -6,23 +6,23 @@ import (
 	"fmt"
 	"time"
 
-	mail "github.com/textileio/go-mail"
 	"github.com/textileio/go-mail/api/client"
-	"github.com/textileio/go-mail/api/common"
+	mailClient "github.com/textileio/go-mail/api/client"
 	"github.com/textileio/go-mail/cmd"
-	tc "github.com/textileio/go-threads/api/client"
+	"github.com/textileio/go-mail/collection"
+	threadClient "github.com/textileio/go-threads/api/client"
 	"github.com/textileio/go-threads/core/db"
-	"github.com/textileio/go-threads/core/did"
 	"github.com/textileio/go-threads/core/thread"
 )
 
 // Mailbox is a local-first messaging library built on ThreadDB and IPFS.
 type Mailbox struct {
-	cwd    string
-	conf   *cmd.Config
-	client *client.Client
-	id     thread.Identity
-	token  did.Token
+	cwd  string
+	conf *cmd.Config
+	id   thread.Identity
+
+	mc *mailClient.Client
+	tc *threadClient.Client
 }
 
 // Identity returns the mailbox's identity.
@@ -36,7 +36,7 @@ func (m *Mailbox) SendMessage(ctx context.Context, to thread.PubKey, body []byte
 	if err != nil {
 		return
 	}
-	return m.client.SendMessage(ctx, m.id, to, body)
+	return m.mc.SendMessage(ctx, m.id, to, body)
 }
 
 // ListInboxMessages lists messages from the inbox.
@@ -47,7 +47,7 @@ func (m *Mailbox) ListInboxMessages(ctx context.Context, opts ...client.ListOpti
 	if err != nil {
 		return nil, err
 	}
-	return m.client.ListInboxMessages(ctx, opts...)
+	return m.mc.ListInboxMessages(ctx, opts...)
 }
 
 // ListSentboxMessages lists messages from the sentbox.
@@ -57,7 +57,7 @@ func (m *Mailbox) ListSentboxMessages(ctx context.Context, opts ...client.ListOp
 	if err != nil {
 		return nil, err
 	}
-	return m.client.ListSentboxMessages(ctx, opts...)
+	return m.mc.ListSentboxMessages(ctx, opts...)
 }
 
 const reconnectInterval = time.Second * 5
@@ -93,15 +93,12 @@ func (m *Mailbox) WatchInbox(ctx context.Context, mevents chan<- MailboxEvent, o
 	if err != nil {
 		return nil, err
 	}
-	box, err := m.client.SetupMailbox(ctx)
-	if err != nil {
-		return nil, err
-	}
+	box := thread.NewPubKeyIDV1(m.Identity().GetPublic())
 	if !offline {
-		return m.listenWhileConnected(ctx, box, mail.InboxCollectionName, mevents)
+		return m.listenWhileConnected(ctx, box, collection.InboxCollectionName, mevents)
 	}
 	return cmd.Watch(ctx, func(ctx context.Context) (<-chan cmd.WatchState, error) {
-		return m.listenWhileConnected(ctx, box, mail.InboxCollectionName, mevents)
+		return m.listenWhileConnected(ctx, box, collection.InboxCollectionName, mevents)
 	}, reconnectInterval)
 }
 
@@ -114,15 +111,13 @@ func (m *Mailbox) WatchSentbox(ctx context.Context, mevents chan<- MailboxEvent,
 	if err != nil {
 		return nil, err
 	}
-	box, err := m.client.SetupMailbox(ctx)
-	if err != nil {
-		return nil, err
-	}
+
+	box := thread.NewPubKeyIDV1(m.Identity().GetPublic())
 	if !offline {
-		return m.listenWhileConnected(ctx, box, mail.SentboxCollectionName, mevents)
+		return m.listenWhileConnected(ctx, box, collection.SentboxCollectionName, mevents)
 	}
 	return cmd.Watch(ctx, func(ctx context.Context) (<-chan cmd.WatchState, error) {
-		return m.listenWhileConnected(ctx, box, mail.SentboxCollectionName, mevents)
+		return m.listenWhileConnected(ctx, box, collection.SentboxCollectionName, mevents)
 	}, reconnectInterval)
 }
 
@@ -133,8 +128,8 @@ func (m *Mailbox) listenWhileConnected(ctx context.Context, boxID thread.ID, box
 		defer close(state)
 
 		// Start listening for remote changes
-		events, err := thread.Listen(ctx, boxID, []tc.ListenOption{{
-			Type:       tc.ListenAll,
+		events, err := m.tc.Listen(ctx, boxID, []threadClient.ListenOption{{
+			Type:       threadClient.ListenAll,
 			Collection: boxName,
 		}})
 		if err != nil {
@@ -149,14 +144,14 @@ func (m *Mailbox) listenWhileConnected(ctx context.Context, boxID thread.ID, box
 					continue
 				}
 				switch e.Action.Type {
-				case tc.ActionCreate, tc.ActionSave:
+				case threadClient.ActionCreate, threadClient.ActionSave:
 					var msg client.Message
 					if err := msg.UnmarshalInstance(e.Action.Instance); err != nil {
 						errs <- err
 						return
 					}
 					var t MailboxEventType
-					if e.Action.Type == tc.ActionCreate {
+					if e.Action.Type == threadClient.ActionCreate {
 						t = NewMessage
 					} else {
 						t = MessageRead
@@ -166,7 +161,7 @@ func (m *Mailbox) listenWhileConnected(ctx context.Context, boxID thread.ID, box
 						MessageID: db.InstanceID(e.Action.InstanceID),
 						Message:   msg,
 					}
-				case tc.ActionDelete:
+				case threadClient.ActionDelete:
 					mevents <- MailboxEvent{
 						Type:      MessageDeleted,
 						MessageID: db.InstanceID(e.Action.InstanceID),
@@ -197,7 +192,7 @@ func (m *Mailbox) ReadInboxMessage(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	return m.client.ReadInboxMessage(ctx, id)
+	return m.mc.ReadInboxMessage(ctx, id)
 }
 
 // DeleteInboxMessage deletes an inbox message by ID.
@@ -206,7 +201,7 @@ func (m *Mailbox) DeleteInboxMessage(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	return m.client.DeleteInboxMessage(ctx, id)
+	return m.mc.DeleteInboxMessage(ctx, id)
 }
 
 // DeleteSentboxMessage deletes a sent message by ID.
@@ -215,7 +210,7 @@ func (m *Mailbox) DeleteSentboxMessage(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	return m.client.DeleteSentboxMessage(ctx, id)
+	return m.mc.DeleteSentboxMessage(ctx, id)
 }
 
 // Identity returns the mailbox's user identity.
@@ -236,17 +231,5 @@ func (m *Mailbox) loadIdentity() error {
 }
 
 func (m *Mailbox) context(ctx context.Context) (context.Context, error) {
-	ctx = common.NewAPIKeyContext(ctx, m.conf.Viper.GetString("api_key"))
-	secret := m.conf.Viper.GetString("api_secret")
-	if secret != "" {
-		var err error
-		ctx, err = common.CreateAPISigContext(ctx, time.Now().Add(time.Hour), secret)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if m.token == "" {
-		// token, err := thread.
-	}
-	return m.client.NewTokenContext(ctx, m.id, time.Second)
+	return m.mc.NewTokenContext(ctx, m.id, time.Second)
 }

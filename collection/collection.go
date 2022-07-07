@@ -19,6 +19,8 @@ type Collection struct {
 
 // Options defines options for interacting with a collection.
 type Options struct {
+	Thread   core.ID
+	Name     string
 	Identity did.Token
 }
 

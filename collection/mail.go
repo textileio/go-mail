@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/alecthomas/jsonschema"
-	"github.com/textileio/go-mail/api/common"
 	mdb "github.com/textileio/go-mail/mongodb"
 	dbc "github.com/textileio/go-threads/api/client"
 	"github.com/textileio/go-threads/core/thread"
@@ -71,6 +70,16 @@ type SentboxMessage struct {
 	CreatedAt int64  `json:"created_at"`
 }
 
+type Message struct {
+	ID        string
+	From      string
+	To        string
+	Body      string
+	Signature string
+	CreatedAt int64
+	ReadAt    int64
+}
+
 func init() {
 	reflector := jsonschema.Reflector{ExpandedStruct: true}
 	inboxSchema = reflector.Reflect(&InboxMessage{})
@@ -115,16 +124,17 @@ func (m *Mail) NewMailbox(ctx context.Context, opts ...Option) (thread.ID, error
 	for _, opt := range opts {
 		opt(args)
 	}
-	id := thread.NewRandomIDV1()
-	ctx = common.NewThreadNameContext(ctx, ThreadName)
+	thread := thread.NewRandomIDV1()
+	// ctx = common.NewThreadIDContext(ctx, thread)
+	// ctx = common.NewThreadNameContext(ctx, ThreadName)
 	err := m.c.NewDB(
 		ctx,
-		id,
+		thread,
 		db.WithNewManagedName(ThreadName),
 		db.WithNewManagedCollections(inboxConfig, sentboxConfig),
 		db.WithNewManagedToken(args.Identity))
 	if err != nil && strings.Contains(err.Error(), mdb.DuplicateErrMsg) {
-		return id, ErrMailboxExists
+		return thread, ErrMailboxExists
 	}
-	return id, err
+	return thread, err
 }

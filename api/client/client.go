@@ -5,18 +5,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"time"
 
-	"github.com/gogo/status"
-	"github.com/ipfs/go-cid"
 	pb "github.com/textileio/go-mail/api/pb/mail"
 	"github.com/textileio/go-mail/collection"
 
 	"github.com/textileio/go-threads/core/did"
 	core "github.com/textileio/go-threads/core/thread"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 )
 
 type Client struct {
@@ -54,28 +50,6 @@ func (c *Client) NewTokenContext(
 // Close closes the client's grpc connection and cancels any active requests.
 func (c *Client) Close() error {
 	return c.conn.Close()
-}
-
-// GetThread returns a thread by name.
-func (c *Client) GetThread(ctx context.Context, name string) (*pb.GetThreadResponse, error) {
-	return c.c.GetThread(ctx, &pb.GetThreadRequest{
-		Name: name,
-	})
-}
-
-// ListThreads returns a list of threads.
-// Threads can be created using the threads or threads network client.
-func (c *Client) ListThreads(ctx context.Context) (*pb.ListThreadsResponse, error) {
-	return c.c.ListThreads(ctx, &pb.ListThreadsRequest{})
-}
-
-// SetupMailbox creates inbox and sentbox threads needed user mail.
-func (c *Client) SetupMailbox(ctx context.Context) (mailbox core.ID, err error) {
-	res, err := c.c.SetupMailbox(ctx, &pb.SetupMailboxRequest{})
-	if err != nil {
-		return
-	}
-	return core.Cast(res.MailboxId)
 }
 
 // Message is the client side representation of a mailbox message.
@@ -190,14 +164,14 @@ func (c *Client) ListInboxMessages(ctx context.Context, opts ...ListOption) ([]M
 	for _, opt := range opts {
 		opt(args)
 	}
-	var s pb.ListInboxMessagesRequest_Status
+	var s pb.MailboxMessageStatus
 	switch args.status {
 	case All:
-		s = pb.ListInboxMessagesRequest_STATUS_ALL
+		s = pb.MailboxMessageStatus_ALL
 	case Read:
-		s = pb.ListInboxMessagesRequest_STATUS_READ
+		s = pb.MailboxMessageStatus_READ
 	case Unread:
-		s = pb.ListInboxMessagesRequest_STATUS_UNREAD
+		s = pb.MailboxMessageStatus_UNREAD
 	default:
 		return nil, fmt.Errorf("unknown status: %v", args.status)
 	}
@@ -294,47 +268,4 @@ func (c *Client) DeleteSentboxMessage(ctx context.Context, id string) error {
 		Id: id,
 	})
 	return err
-}
-
-// ArchivesLs list all imported archives.
-func (c *Client) ArchivesLs(ctx context.Context) (*pb.ArchivesLsResponse, error) {
-	req := &pb.ArchivesLsRequest{}
-	return c.c.ArchivesLs(ctx, req)
-}
-
-// ArchivesImport imports deals information for a Cid.
-func (c *Client) ArchivesImport(ctx context.Context, dataCid cid.Cid, dealIDs []uint64) error {
-	req := &pb.ArchivesImportRequest{
-		Cid:     dataCid.String(),
-		DealIds: dealIDs,
-	}
-	_, err := c.c.ArchivesImport(ctx, req)
-	return err
-}
-
-// ArchiveRetrievalLs lists existing retrievals.
-func (c *Client) ArchiveRetrievalLs(ctx context.Context) (*pb.ArchiveRetrievalLsResponse, error) {
-	req := &pb.ArchiveRetrievalLsRequest{}
-	return c.c.ArchiveRetrievalLs(ctx, req)
-}
-
-// ArchiveRetrievalLogs returns the existing logs from the retrieval.
-func (c *Client) ArchiveRetrievalLogs(ctx context.Context, id string, ch chan<- string) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	stream, err := c.c.ArchiveRetrievalLogs(ctx, &pb.ArchiveRetrievalLogsRequest{Id: id})
-	if err != nil {
-		return err
-	}
-	for {
-		reply, err := stream.Recv()
-		if err == io.EOF || status.Code(err) == codes.Canceled {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		ch <- reply.Msg
-	}
-	return nil
 }

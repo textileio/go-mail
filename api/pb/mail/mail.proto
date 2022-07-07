@@ -2,43 +2,6 @@ syntax = "proto3";
 package api.pb.mail;
 option go_package = "github.com/textileio/go-mail/api/pb/mail";
 
-message Period {
-    int64 unix_start = 1;
-    int64 unix_end = 2;
-}
-
-message Usage {
-    string description = 1;
-    int64 units = 2;
-    int64 total = 3;
-    int64 free = 4;
-    int64 grace = 5;
-    double cost = 6;
-    Period period = 7;
-}
-
-message ListThreadsRequest {}
-
-message ListThreadsResponse {
-    repeated GetThreadResponse list = 1;
-}
-
-message GetThreadRequest {
-    string name = 1;
-}
-
-message GetThreadResponse {
-    bytes id = 1;
-    string name = 2;
-    bool is_db = 3;
-}
-
-message SetupMailboxRequest {}
-
-message SetupMailboxResponse {
-    bytes mailbox_id = 1;
-}
-
 message Message {
     string id = 1;
     string from = 2;
@@ -49,12 +12,14 @@ message Message {
     int64 read_at = 7;
 }
 
+// to email or to thread
 message SendMessageRequest {
-    string to = 1;
-    bytes to_body = 2;
-    bytes to_signature = 3;
-    bytes from_body = 4;
-    bytes from_signature = 5;
+    string thread = 1; // sender's thread.ID and did.Token 
+    string to = 2;  // pub key of receiver
+    bytes to_body = 3;
+    bytes to_signature = 4;
+    bytes from_body = 5;
+    bytes from_signature = 6;
 }
 
 message SendMessageResponse {
@@ -62,18 +27,19 @@ message SendMessageResponse {
     int64 created_at = 2;
 }
 
-message ListInboxMessagesRequest {
-    string seek = 1;
-    int64 limit = 2;
-    bool ascending = 3;
-    Status status = 4;
+enum MailboxMessageStatus {
+    UNSPECIFIED = 0;
+    ALL = 1;
+    READ = 2;
+    UNREAD = 3;
+}
 
-    enum Status {
-        STATUS_UNSPECIFIED = 0;
-        STATUS_ALL = 1;
-        STATUS_READ = 2;
-        STATUS_UNREAD = 3;
-    }
+message ListInboxMessagesRequest {
+    string thread = 1;
+    string seek = 2;
+    int64 limit = 3;
+    bool ascending = 4;
+    MailboxMessageStatus status = 5;
 }
 
 message ListInboxMessagesResponse {
@@ -81,9 +47,11 @@ message ListInboxMessagesResponse {
 }
 
 message ListSentboxMessagesRequest {
-    string seek = 1;
-    int64 limit = 2;
-    bool ascending = 3;
+    string thread = 1;
+    string seek = 2;
+    int64 limit = 3;
+    bool ascending = 4;
+    MailboxMessageStatus status = 5;
 }
 
 message ListSentboxMessagesResponse {
@@ -91,7 +59,8 @@ message ListSentboxMessagesResponse {
 }
 
 message ReadInboxMessageRequest {
-    string id = 1;
+    string thread = 1;
+    string id = 2;
 }
 
 message ReadInboxMessageResponse {
@@ -99,50 +68,18 @@ message ReadInboxMessageResponse {
 }
 
 message DeleteInboxMessageRequest {
-    string id = 1;
+    string thread = 1;
+    string id = 2;
 }
 
 message DeleteInboxMessageResponse {}
 
 message DeleteSentboxMessageRequest {
-    string id = 1;
+    string thread = 1;
+    string id = 2;
 }
 
 message DeleteSentboxMessageResponse {}
-
-message GetUsageRequest {
-    string key = 1;
-}
-
-message GetCustomerResponse {
-    string key = 1;
-    string customer_id = 2;
-    string parent_key = 3;
-    string email = 4;
-    int32 account_type = 5;
-    string account_status = 6;
-    string subscription_status = 7;
-    int64 balance = 8;
-    bool billable = 9;
-    bool delinquent = 10;
-    int64 created_at = 11;
-    int64 grace_period_end = 12;
-
-    Period invoice_period = 13;
-
-    map<string, Usage> daily_usage = 14;
-
-    int64 dependents = 15;
-}
-
-message GetCustomerUsageResponse {
-    map<string, Usage> usage = 1;
-}
-
-message GetUsageResponse {
-    GetCustomerResponse customer = 1;
-    GetCustomerUsageResponse usage = 2;
-}
 
 message ArchivesLsRequest {
 }
@@ -209,24 +146,10 @@ message ArchiveRetrievalLogsResponse {
 }
 
 service APIService {
-    rpc GetThread(GetThreadRequest) returns (GetThreadResponse) {}
-    rpc ListThreads(ListThreadsRequest) returns (ListThreadsResponse) {}
-
-    rpc SetupMailbox(SetupMailboxRequest) returns (SetupMailboxResponse) {}
     rpc SendMessage(SendMessageRequest) returns (SendMessageResponse) {}
     rpc ListInboxMessages(ListInboxMessagesRequest) returns (ListInboxMessagesResponse) {}
     rpc ListSentboxMessages(ListSentboxMessagesRequest) returns (ListSentboxMessagesResponse) {}
     rpc ReadInboxMessage(ReadInboxMessageRequest) returns (ReadInboxMessageResponse) {}
     rpc DeleteInboxMessage(DeleteInboxMessageRequest) returns (DeleteInboxMessageResponse) {}
     rpc DeleteSentboxMessage(DeleteSentboxMessageRequest) returns (DeleteSentboxMessageResponse) {}
-
-    rpc GetUsage(GetUsageRequest) returns (GetUsageResponse) {}
-
-    // Archives Import
-    rpc ArchivesLs(ArchivesLsRequest) returns (ArchivesLsResponse) {}
-    rpc ArchivesImport(ArchivesImportRequest) returns (ArchivesImportResponse) {}
-
-    // Archive Retrieval
-    rpc ArchiveRetrievalLs(ArchiveRetrievalLsRequest) returns (ArchiveRetrievalLsResponse){}
-    rpc ArchiveRetrievalLogs(ArchiveRetrievalLogsRequest) returns (stream ArchiveRetrievalLogsResponse) {}
 }
